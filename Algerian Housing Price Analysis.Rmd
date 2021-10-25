@@ -1,0 +1,320 @@
+---
+title: "Algerian Housing Price Analysis"
+output: html_notebook
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(forcats)
+library(rvest)
+library(dplyr)
+library(stringr)
+library(data.table)
+library(jsonlite)
+library(tidyr)
+library(httr)
+library(DT)
+library(purrr)
+library(plyr)
+```
+
+```{r}
+# Store web url
+immo_url <- ("https://www.ouedkniss.com/annonces/?c=immobilier&sc=vente&sc2=appartement&wilaya=%2Calger&prix=1&prix_unite=2&p=")
+immo_url <- paste (immo_url , c(1:2), sep = "")
+
+# Scrape the post links from the urls
+links <- map(immo_url, .%>% read_html() %>% 
+                               html_nodes(".button_details") %>% 
+                               html_attr("href"))%>%
+        unlist()
+
+links <- paste("https://www.ouedkniss.com/",links, sep="")
+
+links<- links[1:10]
+### create empty lists 
+Links<- vector("list", length(links))
+Title <- vector("list", length(links))
+Description <- vector("list", length(links))
+Details <- vector("list", length(links))
+Store.Name<- vector("list", length(links))
+Store.Addresse<- vector("list", length(links))
+Pseudo <- vector("list", length(links))
+
+##Get the Data 
+for(i in 1:length(links)){
+
+print(i) ### to follow the execution
+        Links[[i]] =  links[i]
+        Title[[i]] = links[i] %>% read_html() %>% 
+                         html_nodes("#Title") %>% 
+                         html_text()
+        Description[[i]] = links[i] %>% read_html() %>% 
+                         html_nodes("#GetDescription") %>% 
+                         html_text()
+        Details[[i]]=  links[i] %>% read_html() %>% 
+                         html_nodes("#Prix,#Description p") %>% 
+                         html_text() 
+        Store.Name[[i]] = links[i] %>% read_html(.,encoding = "UTF-8") %>% 
+                        html_nodes("#store_name") %>%
+                        html_text() 
+        Store.Addresse[[i]] = links[i] %>% read_html(.,encoding = "UTF-8") %>% 
+                        html_nodes("#store_adresse") %>%
+                        html_text()
+        Pseudo[[i]] = links[i] %>% read_html(.,encoding = "UTF-8") %>% 
+                        html_nodes(".Pseudo") %>%
+                        html_text()
+}
+
+### Creating a tibble data frame with the populated lists
+housing_data <- tibble(Links = Links,Title =Title, Description =Description,Details=Details,Store.Name=Store.Name, Pseudo= Pseudo)
+```
+
+
+```{r}
+#### Cleansing data
+housing_data2<- mutate(housing_data, 
+                       Description = ifelse(Description=="character(0)", NA, Description),
+                       Details = ifelse(Details=="character(0)", NA, Details),
+                       Store.Name = ifelse(Store.Name=="character(0)", NA, Store.Name),
+                       Store.Addresse = ifelse(Store.Addresse=="character(0)", NA, Store.Addresse),
+                       Pseudo = ifelse(Pseudo=="character(0)", NA, Pseudo)) 
+
+### isolating details list and extracting  all the information to a single data frame
+det<- housing_data2$Details %>% 
+      map(function(x) str_split_fixed(string = x[], pattern = " : ", n=2)) %>% ### splitting into two variables
+      set_names(links) %>% ## Set links as list names in order to do the next manipulation
+      ldply(data.frame, .id = "links") %>% ### converting the list to data.frame
+      select(links, details = X1, values= X2)%>%
+	distinct() %>%
+      arrange(links, details)%>%
+	mutate(diff = ifelse(links == lag(links) &
+                           details == lag(details) &
+                           values!=lag(values,1),1,0)) %>%
+      			   filter(diff == 0)     ### to remove th rest of the duplication
+
+det$details<- str_trim(det$details) ## trim the details variable
+
+mgsub <- function(pattern, replacement, x, ...) {
+  if (length(pattern)!=length(replacement)) {
+    stop("pattern and replacement do not have the same length.")
+  }
+  result <- x
+  for (i in 1:length(pattern)) {
+    result <- gsub(pattern[i], replacement[i], result, ...)
+  }
+  result
+} ### create a multiple replacement pattern with gsub
+
+det$details<- mgsub(c("Nombre de piÃ¨ces","SpÃ©cifications", "Nombre d'Ã©tages / Ã©tage","DÃ©posÃ©e le","NumÃ©ro"),
+      c("Nombre de pièces","Spécifications","Nombre d'étages / étage","Déposée le","Numéro"),
+      det$details) ###  replace the duplicated details names with the original
+det<- spread(det,details, value = values) ### convert to a longer format
+det<-det[-3] ## remove the duplicated variable
+
+
+housing_data2<- housing_data2[!duplicated(housing_data2$Links),] ### remove the duplicated rows from the housing_data
+ det<-cbind(det,housing_data2[c(-1,-4)]) %>%
+       mutate_if(is.list, unlist) ### combine the two dataset and convert character lists to character vector
+write.csv(det,"det.csv") ### write the data to the desk
+
+```
+
+```{r}
+housing <- read.csv("C:/Users/fateh/Documents/det.csv")[c(-1,-3)] ### reading the data and removing unecessary variables
+str(housing) ## check the structure of the data
+names(housing)<- c("Links","Date","Nb.Floor","Nb.Room","Nb.Views","Nb.Offer","Price","District","Specifics",
+                   "Area","Title","Description","Store.Name","Pseudo","Store.Addresse") ### rename the variables
+housing$Title <- as.character(str_split_fixed(str_trim(housing$Links), "/",4)[,4])## Juat because i missed it in the bigining 
+summary(housing) ### check the summary
+```
+
+```{r}
+## create some new variables based on the information found on the existing ones
+housing$Price.value <- as.numeric(str_split_fixed(str_trim(housing$Price), " ",3)[,1])
+housing$Price.unit<- factor(str_split_fixed(str_trim(housing$Price), " ",3)[,2])
+housing$Price.desc<- factor(str_split_fixed(str_trim(housing$Price), " ",3)[,3])
+housing$Area <- as.numeric(str_split_fixed(str_trim(housing$Area), " ",2)[,1]) 
+
+housing$Price.value.dzd <- round(ifelse(housing$Price.unit == "Milliards"&housing$Price.value <=10, 
+                                       housing$Price.value *10000000,
+                              ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value <= 35,
+                                     housing$Price.value * housing$Area*10000,
+                                     ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value > 35 & housing$Price.value <10000,
+                                            housing$Price.value *10000,
+                                            ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value >10000,
+                                                   housing$Price.value * housing$Area,
+                                                   ifelse(housing$Price.unit == "Millions"& housing$Price.value <=10,
+                                                          housing$Price.value * 10000000,
+                                                          ifelse(housing$Price.unit == "Millions"& housing$Price.value >100,
+                                                                 housing$Price.value * 10000,
+                                                                 ifelse(housing$Price.unit == "Millions"& housing$Price.value >10 & housing$Price.value <100,
+                                                                        housing$Price.value * 1000000,housing$Price.value))))))),digits = 0)  
+
+
+## create a variable that containg nominal rules applied to Price variable, so that we can use it in our sanity check
+housing$Prixce.rules <- ifelse(housing$Price.unit == "Milliards"&housing$Price.value <=10, 
+                             "housing$Price.value *10000000",
+                             ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value <= 35,
+                                    "housing$Price.value * housing$Area*10000",
+                                    ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value > 35 & housing$Price.value <10000,
+                                           "housing$Price.value *10000",
+                                           ifelse(str_detect(housing$Price.desc, "m²") == TRUE& housing$Price.value >10000,
+                                                  "housing$Price.value * housing$Area",
+                                                  ifelse(housing$Price.unit == "Millions"& housing$Price.value <=10,
+                                                         "housing$Price.value * 10000000",
+                                                         ifelse(housing$Price.unit == "Millions"& housing$Price.value >100,
+                                                                "housing$Price.value * 10000",
+                                                                ifelse(housing$Price.unit == "Millions"& housing$Price.value >10 & housing$Price.value <100,
+                                                                       "housing$Price.value * 1000000","housing$Price.value")))))))
+## create even more variables
+library(lubridate)
+housing$Date <- ymd(str_trim(str_split_fixed(housing$Date,"à", 2)[,1]))
+##housing$Hour<- str_sub(str_trim(str_split_fixed(housing$Date,"à", 2)[,2]),1,2)
+housing$Month<- month(housing$Date,label = TRUE)
+housing$Year <- year(housing$Date)
+housing$Municipality <- factor(str_trim(paste(str_split_fixed(housing$Title,"-", 9)[,3],
+                                              str_split_fixed(housing$Title,"-", 9)[,4],
+                                              str_split_fixed(housing$Title,"-", 9)[,5],
+                                              str_split_fixed(housing$Title,"-", 9)[,6],
+                                              str_split_fixed(housing$Title,"-", 9)[,7],sep=" ")
+                                ))
+housing$Municipality <- gsub(x = housing$Municipality,pattern = "f[0-9]","")
+housing$Municipality <- gsub(x = housing$Municipality,pattern = "d[0-9]","")
+housing$Municipality <- gsub(x = housing$Municipality,pattern = "algerie","")
+housing$Municipality <- gsub(x = housing$Municipality,pattern = "immobilier","")
+housing$Municipality <- str_trim(gsub(x = housing$Municipality,pattern = "[0-9]",""))
+housing$Garage <- str_detect(housing$Specifics, "Garage")
+housing$Garden <- str_detect(housing$Specifics, "Jardin") 
+housing$Furnished <- str_detect(housing$Specifics, "Meublé")
+housing$Promise <- str_detect(housing$Specifics, "Promesse de vente")
+housing$New.Project <- str_detect(housing$Specifics, "Promotion")
+housing$Payment <- factor(ifelse(str_detect(housing$Specifics,"Paiement par tranches") == TRUE, "tranches", "comptant")) 
+write.csv(housing, "housing.csv",row.names = FALSE)
+```
+
+```{r}
+### let's start analysing our data
+housing<- read.csv("housing.csv")
+### Have a look at our extended Housing  dataset
+View(housing)
+str(housing)
+summary(housing)
+## remove abnormal data 
+housing2 <- housing %>%
+        filter(Price.value.dzd <100000000 & Price.value.dzd >= 4000000,
+               str_trim(Nb.Room) %in% c("1","2","3","4","5","6","7")) %>%
+        mutate(Nb.Room = factor(Nb.Room))
+housing2$Nb.Room <- ordered(str_trim(housing2$Nb.Room) ,levels =1:7)
+##housing2$Price.value <- factor(housing2$Prix.rules)
+housing2<- housing2%>% mutate(Top_Municipalities = fct_lump(housing2$Municipality, 11)) 
+summary(housing2$Top_Municipalities)## check
+unique(housing$Municipality)## check again nehi twesswiss
+```
+
+```{r}
+### making some plots
+ggplot(housing2[housing2$Price.value.dzd<= quantile(housing2$Price.value.dzd, probs = 0.9),],
+       aes(x= New.Project, y = Price.value.dzd, color =Garage))+
+        geom_boxplot(outlier.fill  = "red") + 
+        facet_wrap(~Top_Municipalities,scales = "free") +
+        labs(title = "Distribution of Appartment Price in Algiers", 
+             subtitle = "New Vs Old Property", 
+             caption = "Blad Miki")+
+        xlab("New Construction Project") + ylab("Price in DZD")+
+        theme_gray(base_size = 8)
+
+ggplot(housing2[housing2$Price.value.dzd<= quantile(housing2$Price.value.dzd, probs = 0.9),],
+       aes(x= Nb.Room, y = Price.value.dzd, color =factor(New.Project)))+
+        geom_boxplot(outlier.fill  = "red") + 
+        facet_wrap(~Top_Municipalities,scales = "fix") +
+        labs(title = "Distribution of Appartment Price in Algiers", 
+             subtitle = "New Vs Old Property", 
+             caption = "Blad Miki")+
+        xlab("Nb.Room") + ylab("Price in DZD")+
+        theme_gray(base_size = 8)
+
+ggplot(housing2[housing2$Price.value.dzd<= quantile(housing2$Price.value.dzd, probs = 0.9),],
+       aes(x= Year, y = Price.value.dzd))+
+        geom_bar (stat = "identity")+ 
+        ##facet_wrap(~TNb.Room,scales = "free") +
+        labs(title = "Distribution of Appartment Price in Algiers", 
+             subtitle = "New Vs Old Property", 
+             caption = "Blad Miki")+
+        xlab("New Construction Project") + ylab("Price in DZD")+
+        theme_gray(base_size = 8)
+        
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(ggmap)
+library(rgdal)
+library(sp)
+library(maptools)
+library(tmap)
+library(RColorBrewer)
+library(classInt)
+library(PBSmapping)
+```
+
+```{r}
+commune.names <- paste("Algiers,", as.character(unique(housing$Municipality))[-59], sep=" ")
+commune.info <-geocode(commune.names, output = "more") 
+commune.info <-cbind (Municipality =as.character(unique(housing$Municipality))[-59], commune.info)
+#unique(commune.info$locality)
+#dely_brahim<-geocode("alger, dely brahim", "more")
+#dely_brahim$commune <- "alger dely brahim"
+#dely_brahim$country<- "Algeria"  
+##names(commune.info)[1]<-"Municipality"
+commune.info<-commune.info%>% filter(commune!="alger dely brahim")%>%
+        select(-14,-15) %>%
+        rbind(.,dely_brahim)
+
+
+Housing_Data <- housing2%>%
+        left_join(., commune.info)
+write.csv(Housing_Data, "Housing_Data.csv", row.names = FALSE)
+Housing_Data<- Housing_Data[!is.na(Housing_Data$Price.value.dzd),]
+```
+
+```{r}
+Housing_Data<-read.csv("Housing_Data.csv")
+housing_data_Grp <- Housing_Data %>%
+        filter(Year >=2016, Nb.Room ==3) %>%
+        select(Municipality,Price.value.dzd,Area ) %>%
+        group_by(Municipality) %>%
+        summarise(Price = median(Price.value.dzd, na.rm = TRUE),
+                  Area = median(Area, na.rm =TRUE)
+                  ) 
+
+
+``` 
+
+```{r}
+sh<-readShapePoly("C:/Users/fateh/Documents/R Scripts/Shapefile/algeria/communes.shp")
+sh<-sh[sh@data$wilaya=="ALGER",]
+unique(sh@data$commune0)
+unique(Housing_Data$Municipality)
+Housing_Data$Municipality<- toupper(str_split_fixed(string =Housing_Data$Municipality, pattern = " ",n = 2 )[,2])
+
+Housing_Data$Municipality<- mgsub(c("GUE DE CONSTANTINE", "BAB EZZOUAR","BACHDJERRAH","HAMMAMET", "BIRKHADEM",
+                                    "BELOUIZDAD","BOLOGHINE","CENTRE", "CHEVALLEY","HRAOUA","TESSALA EL MERDJA"),
+      c("DJISR KSENTINA","BEB EZZOUAR","BACH DJERRAH", "BAINS ROMAINS", "BIR KHADEM", "HAMMA ANASSERS",
+        "BOLOGHINE IBN ZIRI", "ALGER", "BOUZAREAH", "HARAOUA", "TASSALA EL MERDJA"),
+     Housing_Data$Municipality)
+sh@data <- inner_join(sh@data,housing_data_Grp, by=c("commune0" = "Municipality"))
+sh@data$NAME_2<- gsub("alger", "",sh@data$NAME_2)
+sh@data$NAME_P<- paste(toupper(sh@data$NAME_2), "(",format(round(sh@data$Price / 1e6, 1), 
+                                                  trim = TRUE), "M",")",sep="")
+rdylgn <- brewer.pal(9, "RdYlGn")
+###using tmap
+tm_shape(sh) +
+    tm_borders() +
+    tm_fill(col = "Price",palette = rev(rdylgn)) +
+    tm_text("commune0", size=0.6,col = "black")+
+    tmap_style("cobalt")+ 
+    tm_layout(title = "Median Housing Price in Algiers",title.position = c(0.4,0.95))+
+    tm_legend(attr.position = c("right","bottom"))
+```

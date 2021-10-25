@@ -1,0 +1,300 @@
+---
+title: "Web Scraping & Text cleaning"
+author: "Hamza Saadi"
+date: "September 20, 2018"
+output: html_document
+---
+
+<center>
+![](Proposition_10.jpg) 
+</center>  
+  
+  
+    
+    
+```{r  message=FALSE,warning=FALSE,cache=T}  
+
+library(tidyverse) #data manipulation and visualization
+library(rvest)
+``` 
+
+# Part I : Scrap the data from LKERIA web site:  
+
+## website introduction:  
+
+Lkeria website contain alot of articles that we may find useful to analyse.  
+
+With the first look in `Actualité`section we find different  articles with different topics.  
+
+
+<center> 
+![](First_page.png)  
+</center>   
+
+  
+  
+As we select one article, we see a page like this one bellow, contain different informations.  
+
+<center> 
+![](second_page.png) 
+
+</center> 
+
+
+## Web Scraping.
+
+This is an exemple how source code look like:  
+
+<center>
+![](html_sourcepage.png)
+</center>    
+
+# 
+
+Here we're going to create a function to scrap all avaible links from Lkeria page's.  
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+Scrap_links<- function(url){
+  url %>% 
+    read_html()%>%
+    html_nodes("a")%>%
+    html_attr("href")%>%
+    unique()
+}
+```  
+  
+  
+# 
+
+Since all articles Lkeria website  have  one root, wiche is:
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+url <- "https://www.lkeria.com/actualité-P"  # The root Link.
+
+links <- lapply(paste0(url,                  # list_apply function "Scrap_link"
+                       c(1:72)),             # on all avaible "Actualité"
+                Scrap_links)                 # links on Lkeria website  to return list of vectors of links
+```  
+
+#  
+
+Let's take look at links:  
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+
+head(links[[1]],10)                       # print first 5 Observations
+```  
+
+# 
+
+Since it's list of vectors of links, we need to find links with a specific pattern.
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+#Define indices to use it later on.
+indices <- lapply(X = links,               # use list_apply function on links
+                  FUN = grep,              # with grep function   
+                  pattern = "^actualité/") # to return all indicies of character that start with  "actualité/"
+
+head(indices[[1]])                         # indicies of first link on first webpage
+```
+
+Now, that we have all links, and indicies needed let's wrap it up:
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+# Function to combine list and it's indicies:
+
+scrap_lkeria <- function(x,l,i){         # x: page range, l: list, i: indices
+  return(l[[x]][i[[x]]])
+  
+}
+
+Thelinks <- sapply(c(1:72),             # application simplify_apply on scrap_lkeria
+                   FUN =scrap_lkeria,   # to return list of needed links.
+                   USE.NAMES = F,
+                   l=links,
+                   i=indices)%>%
+  unlist(use.names = F)                 # to transfer it from list of vectors to charachter vector.
+
+head(Thelinks)
+```  
+
+# 
+
+So far so good, but we still need to add strings in order to be a usefull links.
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+#Easy Step
+Thelinks <- paste0("https://www.lkeria.com/",Thelinks)
+
+head(Thelinks)
+print(paste0("Number of links: ",length(Thelinks)))
+
+```   
+
+# 
+
+Getting links it was the easy part, now let's start scraping the articles using `Thelinks`, But first of all we need to define  patterns to use in scraping and subsutting with *Regular expression*.  
+### Comments: 
+
+- `<.*?>` To remove all HTML tags.  
+- `http[^[:space:]]*` To remove all html links that start with http or https.  
+- `\\(adsbygoogle=window.adsbygoogle\\|\\|\\[\\]\\).push\\(\\{\\}\\);` To remove google ads.  
+- `\\[.*?\\]` in case there are tags like `[caption][/captio]` etc...  
+- Also removing names of writers since there are few names mentioned bellow.   
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+the_pattern <- paste("<.*?>",
+                      "http[^[:space:]]*",
+                      "\\(adsbygoogle=window.adsbygoogle\\|\\|\\[\\]\\).push\\(\\{\\}\\);",
+                      "\\[.*?\\]",
+                     "Idir Zidane",
+                     "Izouaouen Noreddine",
+                     "Lotfi Ramdani",
+                     "Nabil Walid",
+                     "Rédaction Lkeria",
+                     "Walid Nsaibia",
+                      sep = "|")
+# Define scrap_articles function: 
+Scrap_articles <- function(url){
+      html <- url %>%                              # creat HTML page from URL input
+        read_html()
+      
+      title <- html%>%                             # Get title from 
+        html_nodes(".content-title")%>%            # .content-title node
+        html_text()%>%                             # transform from html to text
+        iconv(from = "UTF-8","latin1", sub="")%>%  # remove all character that's not latin1
+        str_trim()                                 # remove leading and trailing white spaces
+      
+      raw_info <- html%>%                          # Get all avaible text from 
+        html_nodes(".content-meta")%>%             # .content-meta node
+        html_text()%>%                             # transform from html to text
+        str_split(pattern = "le|par")              # split to a list based on pattern to define date/writer
+      
+      date <- raw_info[[1]][2] %>%                 # get date
+                          str_trim()               # remove leading and trailing white spaces
+      
+      writer <- raw_info[[1]][3] %>%               # get writer name's
+                    str_trim()                     # remove leading and trailing white spaces
+      
+      intro  <- html%>%                            # get introduction section from
+        html_nodes(".col-xs-9")%>%                 # .col-xs-9 node
+        html_text()%>%                             # transform from html to text
+        str_replace_all(pattern =the_pattern ,     # remove unwanted pattern and
+                        replacement = " ")%>%      # replace with white space
+        iconv(from = "UTF-8","latin1", sub="")%>%  # remove all character that's not latin1
+        str_trim()                                 # remove leading and trailing white spaces
+      
+      
+      
+      if((length(intro) == 0) ||                     # Check in case intro is Empty          
+         ( str_detect(intro,"Article modifié le") || # Check in case intro is the same as Text(further var)
+           nchar(intro)<=1)){                        # Check in case intro is only white space
+        intro <- NA                                  # Force intro to be NA
+      }
+      
+      text <- (html%>%                                            
+        html_nodes(".content")%>%                    # Select node .content from HTML page
+        html_text() %>%                              # get the text
+        str_split(pattern = "Article modifié le"))[[1]][1] %>% # Split based on patter retrive text 
+        str_replace_all(pattern = the_pattern,replacement = " ")%>% # remove unwated pattern
+        iconv(from = "UTF-8","latin1", sub="")%>%    # remove all character that's not latin1
+        str_trim()                                   # remove leading and trailing white spaces
+      
+      return(c(title,date,writer,intro,text,url))    # retun all retrieved var
+}
+
+secure_scrap <- possibly(.f = Scrap_articles,             # Creat secure funtion to return NAs 
+                        otherwise = c(NA,NA,NA,NA,NA,NA),# in case there is dead links
+                        quiet = T)                       # skip warnings or msg.
+``` 
+
+# 
+
+After defining the function needed, let's start the process to scrap the data:
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+start.time <- Sys.time()                                    # Start time excution
+
+DF <- Thelinks %>% 
+  map(.f = secure_scrap) %>%                                # map var Thelinks as input to scure_scrap
+  map(function(x) data.frame(t(x),stringsAsFactors = F))%>% # map list output from previous map to creat  DFs 
+  bind_rows()                                               # tansform list of Data frames to one DF
+
+names(DF) <- c("Title",                                     # Define column names
+               "Publication.Date",
+               "Writer",
+               "Introduction",
+               "Text",
+               "Link")
+
+end.time <- Sys.time()                                     # Stop time excution
+
+time.taken <- end.time - start.time                        # difference
+
+print(time.taken)            
+```
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+glimpse(DF) 
+
+write.csv(x = DF,                  # Define var to store
+          file = "ScapedFile.csv", # file name
+          row.names = F)           # drop raw names
+```
+
+## Part Two: Data Cleaning & Manipulation  
+
+From the previous section we've got a complete data set of articles, but still has some NA's, and uncleaned data. 
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+DF <- read.csv("ScapedFile.csv",               # Since it's small datasets we can use base function
+               encoding = "latin1",            # "latin1" to be able to read charachters with "accents"
+               stringsAsFactors = F)           # Drop factors Option
+
+glimpse(DF)                                    # take a glimpse
+``` 
+  
+### Comments:
+Now, we need to some manipulation and  cleaning:    
+
+* Transform `Publication.Date` to Date format to be useful.  
+
+* Remove rows with NA values in `Publication.Date` var.  
+
+* Creat a variable that take `Intro` if `Text` == NA else take `Text`.  
+
+* Extract New variable `Type` from `Link` using *regular expression*.  
+
+
+```{r message=FALSE,warning=FALSE,cache =TRUE}
+DF$Publication.Date <- DF$Publication.Date %>%      # Transform Publication.Date from
+                        as.Date(format="%d/%m/%Y")  # Character to date type
+
+
+
+DF <- DF[!is.na(DF$Publication.Date),]              # Select only rows that doesn't contain NA's
+
+DF$Full.Text <- DF$Text                             # Creat Full.text Var similair to Text var
+
+DF$Full.Text[is.na(DF$Full.Text)] <- DF$Introduction[is.na(DF$Full.Text)] # fill NA's Var.
+
+DF$Full.Text<- DF$Full.Text %>%                   # Remove residue of HTML code
+  str_replace_all("\\{[^\\}]+\\}|\\.[A-Za-z0-9_]+|#[#A-Za-z0-9_]+|\\W", " ")
+
+sum(is.na(DF$Full.Text))                            # Check if there are NA's in Full.text var
+  
+DF$Type <- sapply(DF$Link,                          # Created new var Type from Link
+                      FUN = function(x) strsplit(x,split = "/")[[1]][5], # custum function to select
+                      USE.NAMES = F)                # remove row names.                        
+
+
+DF <- DF %>%                                        # We removed Intro, Text, Link
+  select(Title,Publication.Date,Writer,Full.Text,Type)
+
+
+glimpse(DF)                                         # take glimpse
+
+table(DF$Type)                                      # Count Different Obs in Type var
+
+write.csv(DF,"CleanedArticles.csv",row.names = F)      # always save your progress
+
+Col_class <- sapply(DF,class,USE.NAMES = F)
+```   

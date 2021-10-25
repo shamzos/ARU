@@ -1,0 +1,39 @@
+---
+title: "Text Mining, Introduction"
+author: "Hamza Saadi"
+date: "September 20, 2018"
+output: html_document
+---
+
+<center>
+![](Proposition_10.jpg) 
+</center>  
+  
+    
+    
+# 
+
+After the EDA that have been made by @Mohamed_Yacine_Smail on  both data from [lkeria](https://www.lkeria.com/) and [ouedkniss](https://www.ouedkniss.com/immobilier) in part II, now will see a different type of analysis which is text mining 
+
+
+## Introduction: 
+
+
+From year to year it has become imperative for an organization to have a structure in place to mine actionable insights from the text being generated. From social media analytics to risk management and cybercrime protection, dealing with text data has never been more important.  
+
+In this article we will discuss different methods and techniques used in textming, starting with some basic techniques which will lead into advanced text mining methodes as natural language processing also learning about pre-processing of the text data in order to extract better features from clean data.  
+
+
+<center>
+![](img0.jpeg) 
+</center> 
+
+
+## Procedure: 
+Our main idea here is to see if there is a correlation between sentiment of lkeria articles and housing price.
+First of all we need a raw texts. So we will scrap articles from the website, after that we need to make some pre-processing to creat structed data from these raw texts.
+Once we complete the pre-processing phase, we will  cluster our articles in groups in order to select the interesting ones, after that we will make a sentiment analysis on those texts  and see if it has impacte on our use case.
+
+<center>
+![](img1.png) 
+</center>

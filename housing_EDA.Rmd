@@ -1,0 +1,210 @@
+---
+title: "Algerian Housing EDA"
+output: html_notebook
+---
+
+Now that we have the data from both websites `ouedkniss` and `lkeria`
+
+### Preparations {.tabset .tabset-fade .tabset-pills}
+
+#### Loading the packages
+```{r message=FALSE, warning=FALSE}
+library(tidyverse) #data manipulation and visualization
+library(stringr) #string manipulation
+library(lubridate) #date & time manipulation
+```
+
+#### Loading the data
+```{r message=FALSE, warning=FALSE}
+lkeria <- read_csv("algiers_lkeria.csv")
+ouedkniss <- as_tibble(read.csv("Housing_Data26072018.csv"))
+```
+
+### Structure {.tabset .tabset-fade .tabset-pills}
+
+As a first step let's have an overview of our data.
+
+#### Lkeria
+
+```{r}
+glimpse(lkeria)
+```
+
+#### Ouedkniss
+
+```{r}
+ouedkniss %>% 
+  select(ID.Offer, Date, Hour, Month, Municipality, lon, lat, 
+         Nb.Floor:Nb.Views, Area, Garage:Payment, Price.value.dzd, District, Top_Municipalities,
+         Announcer.Name, Announcer.Type, Store.Municipality, Store.lon, Store.lat) %>% 
+  glimpse()
+```
+
+
+
+#### Reformatting lkeria data
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+lkeria <- lkeria %>% 
+  filter(type == "Appartement") %>% 
+  mutate(Nb.floor = as.integer(floor_nbr),
+         Top_Municipalities = fct_lump(district, 9),
+         Announcer.Type = word(agency_name, 1, 2),
+         price_m2 = price/surface, 
+         Garage = str_detect(details, "Garage"),
+         Garden = str_detect(details, "Jardin"),
+         Furnished = str_detect(details, "Meublé")) %>% 
+  rename(Date = dates,
+         Nb.Room = nbr_rooms,
+         Municipality = district,
+         Area = surface,
+         Price.value.dzd = price)
+glimpse(lkeria)
+```
+
+###
+
+- For `ouedkniss` data, we selected 25 relevent variables out of 50 for our analysis.
+
+- We reformatted some variables in lkeria dataset so it can be combined with ouedkniss dataset.
+
+- If we explore the Top_Municipalities, we notice that some municipalities are not in common for both datasets.
+
+### {.tabset .tabset-fade .tabset-pills}
+
+#### Lkeria Top Municipalities
+```{r}
+lkeria %>% 
+  group_by(Top_Municipalities) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n))
+```
+
+#### Ouedkniss Top Municipalities
+
+```{r}
+ouedkniss %>% 
+  group_by(Top_Municipalities) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n))
+```
+
+###
+- We notice from the code above that not all *Top Municpalities* are in common for both datasets and since we have fewer data for `Lkeria`.
+- for a fair comparison, we'll create a new variable **price per meter squared**, we'll also adapt `Ouedkniss`'s *Top Municipalities* to match those of `Lkeria`.
+
+```{r}
+ouedkniss <- ouedkniss %>% 
+  mutate(price_m2 = Price.value.dzd/Area, 
+         Top_Municipalities_new = case_when(Municipality == "EL ACHOUR" ~ "El Achour",
+                                            Municipality == "OULED FAYET" ~ "Ouled Fayet",
+                                            Municipality == "HYDRA" ~ "Hydra",
+                                            Municipality == "BIR KHADEM" ~ "Birkhadem",
+                                            Municipality == "CHERAGA" ~ "Cheraga",
+                                            Municipality == "ALGER" ~ "Alger-Centre",
+                                            Municipality == "KOUBA" ~ "Kouba",
+                                            Municipality == "BIR MOURAD RAIS" ~ "Bir Mourad Rais",
+                                            Municipality == "MOHAMMADIA" ~ "Mohammadia",
+                                            TRUE ~ "Other"))
+```
+
+Normalement rana segamna wach nehtajou
+
+Now, let's explore some hypothesis about data
+We'll draw a boxplot to compare the prices across both websites by number of rooms.
+
+First of all, we need to combine our data
+```{r}
+ouedkniss_1 <- ouedkniss %>% 
+  filter(Nb.Room %in% c(3:5), Announcer.Type %in% c("AGENCE")) %>%
+  select(Nb.Room, price_m2, Top_Municipalities_new) %>% 
+  mutate(website = "ouedkniss") %>% 
+  rename(Top_Municipalities = Top_Municipalities_new)
+
+lkeria_1 <- lkeria %>% 
+  filter(Nb.Room %in% c(3:5), Announcer.Type == "Agence immobilière") %>% 
+  mutate(website = "lkeria") %>% 
+  select(Nb.Room, price_m2, Top_Municipalities, website)
+
+combined_data <- rbind(ouedkniss_1, lkeria_1)
+
+combined_data <- combined_data %>% 
+  filter(!is.na(price_m2), price_m2 <= 7.5e5)
+```
+
+```{r}
+combined_data %>% 
+  ggplot(aes(x = website, y = price_m2, fill = website)) +
+  geom_boxplot() +
+  facet_wrap(~ Nb.Room)
+```
+
+We have excluded rows with missing prices and above *750000 DZD* to avoid potential errors in data and some outliers. we also considered only houses which number of rooms varies from 3 to 5 as they are the most common categories.
+
+from this graph, we notice that housing prices in `Lkeria` are **higher** than those listed in `Ouedkniss` for all three categories.
+The median price values in our sample data are:
+```{r}
+tapply(combined_data$price_m2, combined_data$website, median)
+```
+On average, lkeria's prices are higher by approximately **+19%**.
+
+Now let's see the variation of prices across different locations
+
+```{r}
+combined_data %>% 
+  ggplot(aes(x = website, y = price_m2, fill = website)) +
+  geom_boxplot(show.legend = FALSE) +
+  facet_wrap(~ Top_Municipalities, nrow = 2)
+```
+
+This graph shows a comparison by top municipalities. The prices of `Lkeria` are higher for most locations (except for *Bir Mourad Rais* and *Mohammadia*). Kouba has the highest interquartile range IQR, this is very likely due to an error in our data, more investigations are needed to explain this shape.
+
+```{r}
+combined_data %>% 
+  ggplot(aes(x = Top_Municipalities, y = price_m2, fill = Top_Municipalities)) +
+  geom_boxplot(show.legend = FALSE) +
+  facet_wrap(~ website, nrow = 2)
+```
+
+Another hypothesis made about this data is that the announcer type has a significant impact on the price. Let's investigate more by plotting price distributions by *Announcer Type* using `ouedkniss` dataset.
+
+
+```{r message=FALSE}
+ouedkniss %>% 
+  filter(!is.na(price_m2), price_m2 <= 7.5e5, Nb.Room %in% c(3:5), Announcer.Type!= "PROMOTEUR") %>% 
+  ggplot(aes(x = Announcer.Type, y = price_m2, fill = Announcer.Type)) +
+  geom_boxplot()
+  
+```
+
+
+The graph shows that **bureau d'affaire** prices are slightly higher than **housing agencies** ("AGENCE") prices. The **individual offers** ("PARTICULIER") have lower prices. 
+
+The median price values for those categories are *205555.6*, *219649.1*, *161290.3 DZD* respectively. So on average, "BUREAU D'AFFAIRE" prices are more expensive by **+6%** compared to "AGENCE" and by **+36%** compared to "PARTICULIER".
+
+Next, we compare the prices of "BUREAU D'AFFAIRE" from `ouedkniss` to "AGENCE" prices from `lkeria`.
+
+```{r}
+ouedkniss_2 <- ouedkniss %>% 
+  filter(Nb.Room %in% c(3:5), Announcer.Type %in% c("BUREAU D'AFFAIRE")) %>%
+  select(Nb.Room, price_m2, Top_Municipalities_new) %>% 
+  mutate(website = "ouedkniss") %>% 
+  rename(Top_Municipalities = Top_Municipalities_new)
+
+combined_data_2 <- rbind(ouedkniss_2, lkeria_1)
+
+combined_data_2 <- combined_data_2 %>% 
+  filter(!is.na(price_m2), price_m2 <= 7.5e5)
+```
+
+```{r}
+combined_data_2 %>% 
+  ggplot(aes(x = website, y = price_m2, fill = website)) +
+  geom_boxplot() +
+  facet_wrap(~ Top_Municipalities, nrow = 2) +
+  labs(title = " AGENCE(Lkeria) VS. BUREAU D'AFFAIRE(Ouedkniss)")
+```
+
+Even that the "BUREAU D'AFFAIRE" offers the most expensive flats as we have seen earlier, according to this graph, lkeria's "housing agencies" provide higher prices for most municipalities.
+
+
